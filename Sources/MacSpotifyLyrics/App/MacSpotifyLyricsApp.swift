@@ -1,6 +1,6 @@
-import SwiftUI
 import AppKit
 import Combine
+import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
@@ -13,21 +13,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let lyricsCache = LyricsCache()
     private let syncEngine = LyricsSyncEngine()
     private var lastResolvedTrackKey: String?
+    private var lyricsGeneration = 0
     private var lyricsFetchTask: Task<Void, Never>?
     private var settingsCancellables = Set<AnyCancellable>()
 
     override init() {
-        lyricsSourceChain = LyricsSourceChain(providers: LyricsProviderFactory.makeProviders(for: settingsStore.lyricsSources))
+        lyricsSourceChain = LyricsSourceChain(
+            providers: LyricsProviderFactory.makeProviders(
+                for: settingsStore.lyricsSources
+            )
+        )
         super.init()
         observeSettings()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let panel = FloatingPanel(content: LyricsOverlayView(appState: appState, settingsStore: settingsStore))
-        panel.makeKeyAndOrderFront(nil)
+        let panel = FloatingPanel(
+            content: LyricsOverlayView(
+                appState: appState,
+                settingsStore: settingsStore
+            )
+        )
+        if settingsStore.overlayVisible {
+            panel.makeKeyAndOrderFront(nil)
+        }
         floatingPanel = panel
 
-        touchBarController = TouchBarLyricsController(appState: appState, settingsStore: settingsStore)
+        touchBarController = TouchBarLyricsController(
+            appState: appState,
+            settingsStore: settingsStore
+        )
 
         poller.startPolling { [weak self] snapshot in
             self?.handleSnapshot(snapshot)
@@ -38,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         touchBarController?.tearDown()
         poller.stopPolling()
         lyricsFetchTask?.cancel()
+        lyricsCache.purgeNotDownloaded()
     }
 
     private func observeSettings() {
@@ -45,8 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .dropFirst()
             .sink { [weak self] configs in
                 guard let self else { return }
-                self.lyricsSourceChain = LyricsSourceChain(providers: LyricsProviderFactory.makeProviders(for: configs))
-                self.lyricsCache.clear()
+                self.lyricsSourceChain = LyricsSourceChain(
+                    providers: LyricsProviderFactory.makeProviders(for: configs)
+                )
+//                self.lyricsCache.clear()
                 self.lastResolvedTrackKey = nil
                 if let snapshot = self.appState.currentSnapshot {
                     self.handleSnapshot(snapshot)
@@ -66,56 +84,106 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let trackKey = "\(snapshot.artist)|\(snapshot.title)|\(snapshot.duration)|\(snapshot.album)"
+        let trackKey = LyricsCache.trackkKey(artist: snapshot.artist, title: snapshot.title, duration: snapshot.duration, album: snapshot.album)
         if trackKey != lastResolvedTrackKey {
             lastResolvedTrackKey = trackKey
-            resolveLyrics(artist: snapshot.artist, title: snapshot.title, duration: snapshot.duration, trackKey: trackKey, album: snapshot.album)
+            resolveLyrics(
+                artist: snapshot.artist,
+                title: snapshot.title,
+                duration: snapshot.duration,
+                trackKey: trackKey,
+                album: snapshot.album
+            )
         }
 
         if case .synced(let lines) = appState.lyricsResult {
-            appState.currentLineIndex = syncEngine.currentLineIndex(for: snapshot.position, in: lines)
+            appState.currentLineIndex = syncEngine.currentLineIndex(
+                for: snapshot.position,
+                in: lines
+            )
         }
     }
 
-    private func resolveLyrics(artist: String, title: String, duration: TimeInterval, trackKey: String, album: String) {
+    private func resolveLyrics(
+        artist: String,
+        title: String,
+        duration: TimeInterval,
+        trackKey: String,
+        album: String
+    ) {
         lyricsFetchTask?.cancel()
+        lyricsGeneration = 1
+        let generation = lyricsGeneration
         appState.currentLineIndex = nil
 
-        if let cached = lyricsCache.get(artist: artist, title: title, duration: duration, album: album) {
-            appState.lyricsResult = cached
+        if let cached = lyricsCache.get(trackKey: trackKey) {
+//            appState.lyricsResult = .plain("匹配到本地歌词")
+//            Task { @MainActor in
+//                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+//                guard !Task.isCancelled, self.lastResolvedTrackKey == trackKey else { return }
+                appState.lyricsResult = cached
+//            }
             return
         }
 
         print("本地没有歌词缓存，联网搜索...")
-        appState.lyricsResult = .plain("无缓存，搜索歌词...")
+        appState.lyricsResult = .plain("联网搜索歌词...")
 
         let chain = lyricsSourceChain
         lyricsFetchTask = Task { [weak self] in
             guard let self else { return }
-            let result = await chain.resolve(artist: artist, title: title, duration: duration, album: album)
+            let result = await chain.resolve(
+                artist: artist,
+                title: title,
+                duration: duration,
+                album: album
+            )
             guard !Task.isCancelled else { return }
-            self.lyricsCache.set(artist: artist, title: title, duration: duration, album: album, result: result)
-            DispatchQueue.main.async {
-                // Only apply if the track hasn't changed again while this fetch was in flight.
-                guard self.lastResolvedTrackKey == trackKey else { return }
+//            self.lyricsCache.set(
+//                artist: artist,
+//                title: title,
+//                duration: duration,
+//                album: album,
+//                result: result
+//            )
+//            DispatchQueue.main.async {
+//                // Only apply if the track hasn't changed again while this fetch was in flight.
+//                guard self.lastResolvedTrackKey == trackKey else { return }
+//                self.appState.lyricsResult = result
+//            }
+            await MainActor.run{
+                guard generation == self.lyricsGeneration, self.lastResolvedTrackKey == trackKey else { return }
+                self.lyricsCache.set(trackKey: trackKey, result: result)
                 self.appState.lyricsResult = result
             }
         }
+    }
+    
+    func deleteCurrentLyrics() {
+        guard let snapshot = appState.currentSnapshot else { return }
+        let trackKey = LyricsCache.trackkKey(artist: snapshot.artist, title: snapshot.title, duration: snapshot.duration, album: snapshot.album)
+        lyricsFetchTask?.cancel()
+        lyricsGeneration += 1
+        lyricsCache.markNotDownloaded(trackKey: trackKey)
+        appState.lyricsResult = .plain("当前歌词已删除\n\n下次切回本歌曲时将重新下载。")
+        appState.currentLineIndex = nil
     }
 
     func toggleOverlay() {
         guard let panel = floatingPanel else { return }
         if panel.isVisible {
             panel.orderOut(nil)
+            settingsStore.overlayVisible = false
         } else {
             panel.makeKeyAndOrderFront(nil)
+            settingsStore.overlayVisible = true
         }
     }
 
     func openSettings() {
         //kunlun
-//        NSApp.setActivationPolicy(.accessory)
-        
+        //        NSApp.setActivationPolicy(.accessory)
+
         NSApp.activate(ignoringOtherApps: true)
 
         if let controller = settingsWindowController {
@@ -123,7 +191,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let controller = SettingsWindowController(settingsStore: settingsStore) { [weak self] in
+        let controller = SettingsWindowController(settingsStore: settingsStore)
+        { [weak self] in
             self?.floatingPanel?.resetToDefaultFrame()
         }
         controller.showWindow(nil)
@@ -138,12 +207,17 @@ struct MacSpotifyLyricsApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(
+                appState: appDelegate.appState,
                 settingsStore: appDelegate.settingsStore,
                 onToggleOverlay: { appDelegate.toggleOverlay() },
-                onOpenSettings: { appDelegate.openSettings() }
+                onOpenSettings: { appDelegate.openSettings() },
+                onDeleteCurrentLyrics: { appDelegate.deleteCurrentLyrics() }
             )
         } label: {
-            MenuBarLabelView(appState: appDelegate.appState, settingsStore: appDelegate.settingsStore)
+            MenuBarLabelView(
+                appState: appDelegate.appState,
+                settingsStore: appDelegate.settingsStore
+            )
         }
     }
 }
@@ -167,7 +241,9 @@ private struct MenuBarLabelView: View {
     }
 
     private var currentLyricText: String? {
-        guard case .synced(let lines) = appState.lyricsResult else { return nil }
+        guard case .synced(let lines) = appState.lyricsResult else {
+            return nil
+        }
         let index = appState.currentLineIndex ?? 0
         guard lines.indices.contains(index) else { return nil }
         let text = lines[index].text.trimmingCharacters(in: .whitespaces)

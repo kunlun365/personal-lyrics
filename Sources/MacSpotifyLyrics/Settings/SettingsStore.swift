@@ -35,6 +35,9 @@ final class SettingsStore: ObservableObject {
     @Published var touchBarLyricsEnabled: Bool {
         didSet { UserDefaults.standard.set(touchBarLyricsEnabled, forKey: Keys.touchBarLyricsEnabled) }
     }
+    @Published var overlayVisible: Bool {
+        didSet { UserDefaults.standard.set(overlayVisible, forKey: Keys.overlayVisible) }
+    }
 
     private enum Keys {
         static let lyricsSources = "lyricsSources"
@@ -46,6 +49,7 @@ final class SettingsStore: ObservableObject {
         static let windowFrameString = "windowFrameString"
         static let menuBarLyricsEnabled = "menuBarLyricsEnabled"
         static let touchBarLyricsEnabled = "touchBarLyricsEnabled"
+        static let overlayVisible = "overlayVisible"
     }
 
     init() {
@@ -68,8 +72,9 @@ final class SettingsStore: ObservableObject {
 
         self.windowFrameString = UserDefaults.standard.string(forKey: Keys.windowFrameString)
 
-        self.menuBarLyricsEnabled = UserDefaults.standard.object(forKey: Keys.menuBarLyricsEnabled) as? Bool ?? false
+        self.menuBarLyricsEnabled = UserDefaults.standard.object(forKey: Keys.menuBarLyricsEnabled) as? Bool ?? true
         self.touchBarLyricsEnabled = UserDefaults.standard.object(forKey: Keys.touchBarLyricsEnabled) as? Bool ?? false
+        self.overlayVisible = UserDefaults.standard.object(forKey: Keys.overlayVisible) as? Bool ?? false
     }
 
     func resetToDefaults() {
@@ -82,6 +87,7 @@ final class SettingsStore: ObservableObject {
         windowFrameString = nil
         menuBarLyricsEnabled = false
         touchBarLyricsEnabled = false
+        overlayVisible = false
     }
 
     private func persistLyricsSources() {

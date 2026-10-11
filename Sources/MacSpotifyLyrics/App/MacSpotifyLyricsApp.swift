@@ -80,7 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.currentSnapshot = snapshot
 
         guard let snapshot else {
-            // 切歌瞬间 Spotify 会短暂返回空状态，延迟 1s 再提示，避免闪烁
+            // 切歌瞬间 Spotify 会短暂返回空状态，立即清空歌词，但延迟 1s 再提示“未检测到歌曲真在播放”，避免切歌间隙提示闪烁
+            appState.lyricsResult = .none
             noTrackTask?.cancel()
             noTrackTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1s
@@ -259,7 +260,7 @@ private struct MenuBarLabelView: View {
     @ObservedObject var settingsStore: SettingsStore
 
     var body: some View {
-        if settingsStore.menuBarLyricsEnabled, let text = currentLyricText {
+        if settingsStore.menuBarLyricsEnabled, let text = displayText {
             HStack(spacing: 4) {
                 Image(systemName: "music.note.list")
                 Text(text)
@@ -267,6 +268,14 @@ private struct MenuBarLabelView: View {
         } else {
             Image(systemName: "music.note.list")
         }
+    }
+    
+    private var displayText: String? {
+        if settingsStore.menuBarShowTrackName {
+            guard let snapshot = appState.currentSnapshot else { return nil }
+            return "\(snapshot.title) - \(snapshot.artist)"
+        }
+        return currentLyricText
     }
 
     private var currentLyricText: String? {

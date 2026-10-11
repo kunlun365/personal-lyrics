@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastResolvedTrackKey: String?
     private var lyricsGeneration = 0
     private var lyricsFetchTask: Task<Void, Never>?
+    // 延迟显示“未检测到歌曲正在播放”的任务，用于吞掉切歌瞬间的短暂空状态
+    private var noTrackTask: Task<Void, Never>?
     private var settingsCancellables = Set<AnyCancellable>()
 
     override init() {
@@ -53,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         touchBarController?.tearDown()
         poller.stopPolling()
         lyricsFetchTask?.cancel()
+        noTrackTask?.cancel()
         lyricsCache.purgeNotDownloaded()
     }
 
@@ -64,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.lyricsSourceChain = LyricsSourceChain(
                     providers: LyricsProviderFactory.makeProviders(for: configs)
                 )
-//                self.lyricsCache.clear()
+                //                self.lyricsCache.clear()
                 self.lastResolvedTrackKey = nil
                 if let snapshot = self.appState.currentSnapshot {
                     self.handleSnapshot(snapshot)
@@ -77,14 +80,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.currentSnapshot = snapshot
 
         guard let snapshot else {
-            lastResolvedTrackKey = nil
-            lyricsFetchTask?.cancel()
-            appState.lyricsResult = .plain("未检测到歌曲正在播放\n\n请运行Spotify并播放一首歌。")
-            appState.currentLineIndex = nil
+            // 切歌瞬间 Spotify 会短暂返回空状态，延迟 1s 再提示，避免闪烁
+            noTrackTask?.cancel()
+            noTrackTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1s
+                guard let self, !Task.isCancelled,
+                    self.appState.currentSnapshot == nil
+                else { return }
+                self.lastResolvedTrackKey = nil
+                self.lyricsFetchTask?.cancel()
+                self.appState.lyricsResult = .plain(
+                    "未检测到歌曲正在播放\n\n请运行Spotify并播放一首歌。"
+                )
+                self.appState.currentLineIndex = nil
+            }
             return
         }
 
-        let trackKey = LyricsCache.trackkKey(artist: snapshot.artist, title: snapshot.title, duration: snapshot.duration, album: snapshot.album)
+        // 歌曲状态恢复，取消可能挂起的“无歌曲”提示
+        noTrackTask?.cancel()
+        noTrackTask = nil
+        
+        let trackKey = LyricsCache.trackkKey(
+            artist: snapshot.artist,
+            title: snapshot.title,
+            duration: snapshot.duration,
+            album: snapshot.album
+        )
         if trackKey != lastResolvedTrackKey {
             lastResolvedTrackKey = trackKey
             resolveLyrics(
@@ -117,12 +139,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.currentLineIndex = nil
 
         if let cached = lyricsCache.get(trackKey: trackKey) {
-//            appState.lyricsResult = .plain("匹配到本地歌词")
-//            Task { @MainActor in
-//                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-//                guard !Task.isCancelled, self.lastResolvedTrackKey == trackKey else { return }
-                appState.lyricsResult = cached
-//            }
+            //            appState.lyricsResult = .plain("匹配到本地歌词")
+            //            Task { @MainActor in
+            //                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+            //                guard !Task.isCancelled, self.lastResolvedTrackKey == trackKey else { return }
+            appState.lyricsResult = cached
+            //            }
             return
         }
 
@@ -139,29 +161,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 album: album
             )
             guard !Task.isCancelled else { return }
-//            self.lyricsCache.set(
-//                artist: artist,
-//                title: title,
-//                duration: duration,
-//                album: album,
-//                result: result
-//            )
-//            DispatchQueue.main.async {
-//                // Only apply if the track hasn't changed again while this fetch was in flight.
-//                guard self.lastResolvedTrackKey == trackKey else { return }
-//                self.appState.lyricsResult = result
-//            }
-            await MainActor.run{
-                guard generation == self.lyricsGeneration, self.lastResolvedTrackKey == trackKey else { return }
+            //            self.lyricsCache.set(
+            //                artist: artist,
+            //                title: title,
+            //                duration: duration,
+            //                album: album,
+            //                result: result
+            //            )
+            //            DispatchQueue.main.async {
+            //                // Only apply if the track hasn't changed again while this fetch was in flight.
+            //                guard self.lastResolvedTrackKey == trackKey else { return }
+            //                self.appState.lyricsResult = result
+            //            }
+            await MainActor.run {
+                guard generation == self.lyricsGeneration,
+                    self.lastResolvedTrackKey == trackKey
+                else { return }
                 self.lyricsCache.set(trackKey: trackKey, result: result)
                 self.appState.lyricsResult = result
             }
         }
     }
-    
+
     func deleteCurrentLyrics() {
         guard let snapshot = appState.currentSnapshot else { return }
-        let trackKey = LyricsCache.trackkKey(artist: snapshot.artist, title: snapshot.title, duration: snapshot.duration, album: snapshot.album)
+        let trackKey = LyricsCache.trackkKey(
+            artist: snapshot.artist,
+            title: snapshot.title,
+            duration: snapshot.duration,
+            album: snapshot.album
+        )
         lyricsFetchTask?.cancel()
         lyricsGeneration += 1
         lyricsCache.markNotDownloaded(trackKey: trackKey)

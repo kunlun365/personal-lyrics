@@ -61,7 +61,8 @@ private struct SettingsRootView: View {
         }
         .frame(width: 480, height: 420)
         .confirmationDialog(
-            "确定将所有设定恢复到初始设置？这会移除所有你添加过的自定义歌词源，并还原悬浮歌词区域大小。",
+//            "确定将所有设定恢复到初始设置？这会移除所有你添加过的自定义歌词源，并还原悬浮歌词区域大小。",
+            "确定将所有设定恢复到初始设置？界面外观、各类开关和悬浮歌词区域大小会重置，自定义歌词源将保留。",
             isPresented: $showResetConfirmation,
             titleVisibility: .visible
         ) {

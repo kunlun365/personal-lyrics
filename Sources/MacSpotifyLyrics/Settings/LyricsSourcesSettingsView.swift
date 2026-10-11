@@ -3,6 +3,7 @@ import SwiftUI
 struct LyricsSourcesSettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
     @State private var isAddingSource = false
+    @State private var editingSource: LyricsSourceConfig?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -12,10 +13,17 @@ struct LyricsSourcesSettingsView: View {
 
             List {
                 ForEach(settingsStore.lyricsSources) { source in
-                    LyricsSourceRow(source: source, settingsStore: settingsStore)
+                    LyricsSourceRow(
+                        source: source,
+                        settingsStore: settingsStore,
+                        onEdit: { editingSource = source }
+                    )
                 }
                 .onMove { indices, newOffset in
-                    settingsStore.lyricsSources.move(fromOffsets: indices, toOffset: newOffset)
+                    settingsStore.lyricsSources.move(
+                        fromOffsets: indices,
+                        toOffset: newOffset
+                    )
                 }
                 .onDelete { indices in
                     settingsStore.lyricsSources.remove(atOffsets: indices)
@@ -34,7 +42,21 @@ struct LyricsSourcesSettingsView: View {
         }
         .padding(20)
         .sheet(isPresented: $isAddingSource) {
-            AddLyricsSourceSheet(settingsStore: settingsStore, isPresented: $isAddingSource)
+            AddLyricsSourceSheet(
+                settingsStore: settingsStore,
+                isPresented: $isAddingSource,
+                editingSource: nil
+            )
+        }
+        .sheet(item: $editingSource) { source in
+            AddLyricsSourceSheet(
+                settingsStore: settingsStore,
+                isPresented: Binding(
+                    get: { editingSource != nil },
+                    set: { if !$0 { editingSource = nil } }
+                ),
+                editingSource: source
+            )
         }
     }
 }
@@ -42,16 +64,21 @@ struct LyricsSourcesSettingsView: View {
 private struct LyricsSourceRow: View {
     let source: LyricsSourceConfig
     @ObservedObject var settingsStore: SettingsStore
+    var onEdit: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: source.kind == .lrclib ? "music.quarternote.3" : "link")
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
+            Image(
+                systemName: source.kind == .lrclib
+                    ? "music.quarternote.3" : "link"
+            )
+            .foregroundStyle(.secondary)
+            .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(source.name)
-                if source.kind == .customURL, let template = source.urlTemplate {
+                if source.kind == .customURL, let template = source.urlTemplate
+                {
                     Text(template)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -65,6 +92,14 @@ private struct LyricsSourceRow: View {
             Toggle("", isOn: enabledBinding)
                 .toggleStyle(.switch)
                 .labelsHidden()
+            
+            if source.kind == .customURL {
+                Button(action: onEdit) {
+                    Image(systemName: "pencil").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help("编辑")
+            }
 
             Button {
                 settingsStore.lyricsSources.removeAll { $0.id == source.id }
@@ -81,7 +116,11 @@ private struct LyricsSourceRow: View {
         Binding(
             get: { source.isEnabled },
             set: { newValue in
-                guard let idx = settingsStore.lyricsSources.firstIndex(where: { $0.id == source.id }) else { return }
+                guard
+                    let idx = settingsStore.lyricsSources.firstIndex(where: {
+                        $0.id == source.id
+                    })
+                else { return }
                 settingsStore.lyricsSources[idx].isEnabled = newValue
             }
         )

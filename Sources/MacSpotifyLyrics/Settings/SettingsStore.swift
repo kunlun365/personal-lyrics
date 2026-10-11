@@ -83,7 +83,7 @@ final class SettingsStore: ObservableObject {
     }
 
     func resetToDefaults() {
-        lyricsSources = LyricsSourceConfig.defaultSources
+//        lyricsSources = LyricsSourceConfig.defaultSources
         overlayOpacity = Self.defaultOverlayOpacity
         backgroundColor = .black
         textColor = .white

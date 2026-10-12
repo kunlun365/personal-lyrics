@@ -9,6 +9,7 @@ private let SQLITE_TRANSIENT = unsafeBitCast(
 /// TODO: add disk-backed persistence.
 final class LyricsCache {
     private var db: OpaquePointer?
+    private var dbPath: String?
     private let queue = DispatchQueue(label: "MacSpotifyLyrics.LyricsCache")
 
     init() {
@@ -38,9 +39,9 @@ final class LyricsCache {
             at: dir,
             withIntermediateDirectories: true
         )
-        let path = dir.appendingPathComponent("lyrics_cache.db").path
-        guard sqlite3_open(path, &db) == SQLITE_OK else {
-            print("无法打开歌词缓存数据库：\(path)")
+        self.dbPath = dir.appendingPathComponent("lyrics_cache.db").path
+        guard let dbPath, sqlite3_open(dbPath, &db) == SQLITE_OK else {
+            print("无法打开歌词缓存数据库：\(dbPath ?? "(nil)")")
             sqlite3_close(db)
             db = nil
             return
@@ -119,6 +120,19 @@ final class LyricsCache {
         queue.sync {
             guard let db else { return }
             sqlite3_exec(db, "delete from lyrics where downloaded = 0", nil, nil, nil)
+        }
+    }
+    
+    func clearLyricsCache() {
+        queue.sync{
+            if let db { sqlite3_close(db) }
+            db = nil
+            
+            if let path = dbPath {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+            
+            openDatabase()
         }
     }
 }

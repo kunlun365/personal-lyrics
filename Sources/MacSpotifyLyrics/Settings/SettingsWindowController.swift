@@ -26,6 +26,7 @@ private struct SettingsRootView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var windowState: SettingsWindowState
     var onResetWindowSize: () -> Void
+    var onClearLyricsCache: () -> Void
     @State private var showResetConfirmation = false
 
     var body: some View {
@@ -33,7 +34,7 @@ private struct SettingsRootView: View {
             Group {
                 switch windowState.selectedPane {
                 case .sources:
-                    LyricsSourcesSettingsView(settingsStore: settingsStore)
+                    LyricsSourcesSettingsView(settingsStore: settingsStore, onClearLyricsCache: onClearLyricsCache)
                 case .appearance:
                     AppearanceSettingsView(settingsStore: settingsStore)
                 }
@@ -89,7 +90,7 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
     private let toolbar = NSToolbar(identifier: "SettingsToolbar")
     private var cancellable: AnyCancellable?
 
-    init(settingsStore: SettingsStore, onResetWindowSize: @escaping () -> Void)
+    init(settingsStore: SettingsStore, onResetWindowSize: @escaping () -> Void, onClearLyricsCache: @escaping () -> Void)
     {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
@@ -103,7 +104,8 @@ final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
             rootView: SettingsRootView(
                 settingsStore: settingsStore,
                 windowState: windowState,
-                onResetWindowSize: onResetWindowSize
+                onResetWindowSize: onResetWindowSize,
+                onClearLyricsCache: onClearLyricsCache
             )
         )
         super.init(window: window)

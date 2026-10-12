@@ -2,8 +2,10 @@ import SwiftUI
 
 struct LyricsSourcesSettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
+    var onClearLyricsCache: () -> Void
     @State private var isAddingSource = false
     @State private var editingSource: LyricsSourceConfig?
+    @State private var showClearConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -32,6 +34,13 @@ struct LyricsSourcesSettingsView: View {
             .listStyle(.inset)
 
             HStack {
+                Button {
+                    showClearConfirmation = true
+                } label: {
+                    Label("删除本地歌词数据库", systemImage: "trash").foregroundStyle(
+                        .red
+                    )
+                }
                 Spacer()
                 Button {
                     isAddingSource = true
@@ -57,6 +66,16 @@ struct LyricsSourcesSettingsView: View {
                 ),
                 editingSource: source
             )
+        }
+        .confirmationDialog(
+            "确定删除本地已经下载成功的歌词数据库？此操作不可撤销。",
+            isPresented: $showClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                onClearLyricsCache()
+            }
+            Button("取消", role: .cancel) {}
         }
     }
 }
@@ -92,7 +111,7 @@ private struct LyricsSourceRow: View {
             Toggle("", isOn: enabledBinding)
                 .toggleStyle(.switch)
                 .labelsHidden()
-            
+
             if source.kind == .customURL {
                 Button(action: onEdit) {
                     Image(systemName: "pencil").foregroundStyle(.secondary)

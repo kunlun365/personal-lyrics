@@ -101,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 歌曲状态恢复，取消可能挂起的“无歌曲”提示
         noTrackTask?.cancel()
         noTrackTask = nil
-        
+
         let trackKey = LyricsCache.trackkKey(
             artist: snapshot.artist,
             title: snapshot.title,
@@ -221,10 +221,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let controller = SettingsWindowController(settingsStore: settingsStore)
-        { [weak self] in
-            self?.floatingPanel?.resetToDefaultFrame()
-        }
+        let controller = SettingsWindowController(
+            settingsStore: settingsStore,
+            onResetWindowSize: { [weak self] in
+                self?.floatingPanel?.resetToDefaultFrame()
+            },
+            onClearLyricsCache: { [weak self] in
+                self?.lyricsCache.clearLyricsCache()
+                self?.appState.lyricsResult = .none
+                self?.lastResolvedTrackKey = nil
+            }
+        )
         controller.showWindow(nil)
         settingsWindowController = controller
     }
@@ -269,7 +276,7 @@ private struct MenuBarLabelView: View {
             Image(systemName: "music.note.list")
         }
     }
-    
+
     private var displayText: String? {
         if settingsStore.menuBarShowTrackName {
             guard let snapshot = appState.currentSnapshot else { return nil }

@@ -1,7 +1,7 @@
 import Foundation
 
 final class SettingsStore: ObservableObject {
-    static let defaultOverlayOpacity = 0.85
+    static let defaultOverlayOpacity = 0.65
     static let defaultTextSize = 18.0
     static let defaultFontName = "System"
 

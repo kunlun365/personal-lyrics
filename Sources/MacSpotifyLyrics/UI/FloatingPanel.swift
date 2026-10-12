@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 final class FloatingPanel: NSPanel {
-    static let defaultSize = NSSize(width: 420, height: 160)
+    static let defaultSize = NSSize(width: 1000, height: 126)
 
     init<Content: View>(content: Content) {
         let container = ResizableOverlayView(frame: NSRect(origin: .zero, size: Self.defaultSize))

@@ -46,10 +46,9 @@ final class CustomURLLyricsProvider: LyricsProvider {
             .replacingOccurrences(of: "{title}", with: encodedTitle)
             .replacingOccurrences(of: "{album}", with: encodedAlbum)
             .replacingOccurrences(of: "{duration}", with: durationString)
+        print("请求：\(resolvedURLString)")
 
         guard let url = URL(string: resolvedURLString) else { return .none }
-
-        print("歌词源：" + resolvedURLString)
         
         var request = URLRequest(url: url)
         if let apiKeyHeaderName, let apiKeyValue, !apiKeyHeaderName.isEmpty {
@@ -58,6 +57,9 @@ final class CustomURLLyricsProvider: LyricsProvider {
 
         do {
             let (data, response) = try await session.data(for: request)
+//            if let body = String(data: data, encoding: .utf8) {
+//                print("响应：\(body)")
+//            }
             guard let httpResponse = response as? HTTPURLResponse,
                 httpResponse.statusCode == 200
             else {

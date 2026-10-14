@@ -70,6 +70,9 @@ final class CustomURLLyricsProvider: LyricsProvider {
                 LRCLibStyleResponse.self,
                 from: data
             ) {
+                if payload.instrumental == true {
+                    return .plain("纯音乐，请欣赏")
+                }
                 if let syncedLyrics = payload.syncedLyrics,
                     let lines = LRCParser.parse(syncedLyrics), !lines.isEmpty
                 {
@@ -96,6 +99,7 @@ final class CustomURLLyricsProvider: LyricsProvider {
     }
 
     private struct LRCLibStyleResponse: Decodable {
+        let instrumental: Bool?
         let plainLyrics: String?
         let syncedLyrics: String?
     }

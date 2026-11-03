@@ -3,327 +3,259 @@
 //  Created by Andy on 2026/11/3.
 //
 
-import Darwin
 import Foundation
 
-final class MediaRemotePoller {
+final class MediaRemoteAdapterPoller {
+    private var process: Process?
+    private var outputPipe: Pipe?
     private var timer: Timer?
-    private var controller: NSObject?
+    private var shouldRun = false
 
-    private var lastTrackKey: String?
-    private var lastElapsed: TimeInterval = 0
-    private var lastSampleDate = Date()
+    private var buffer = Data()
+    private var latest: TrackState?
+    private var onUpdateHandler: ((PlaybackSnapshot?) -> Void)?
 
-    // macOS 15.4+ 需要 dlopen，否则 NSClassFromString 找不到 MediaRemote 的类
-    private static let mediaRemoteLoaded: Bool = {
-        dlopen(
-            "/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote",
-            RTLD_NOW | RTLD_GLOBAL
-        ) != nil
-    }()
+    private var lastEmitted: PlaybackSnapshot?
+    private var lastEmittedKey: String?
+    private var lastEmittedNil = false
+
+    private struct TrackState {
+        let key: String
+        let title: String
+        let artist: String
+        let album: String
+        let duration: TimeInterval
+        var elapsed: TimeInterval
+        let timestamp: TimeInterval  // epoch 秒；0 表示缺失
+        var rate: Double
+        var isPlaying: Bool
+        let anchorNow: Bool  // 暂停→播放时用“现在”做基准
+        let receivedAt: Date
+    }
 
     func startPolling(
         interval: TimeInterval = 0.25,
         onUpdate: @escaping (PlaybackSnapshot?) -> Void
     ) {
+        onUpdateHandler = onUpdate
+        shouldRun = true
+        lastEmitted = nil
+        lastEmittedKey = nil
+        lastEmittedNil = false
+        launch()
+
         timer?.invalidate()
-        poll(onUpdate: onUpdate)
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true)
-        { [weak self] _ in
-            self?.poll(onUpdate: onUpdate)
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.emitSnapshot()
         }
     }
 
     func stopPolling() {
+        shouldRun = false
         timer?.invalidate()
         timer = nil
-        _ = controller?.perform(NSSelectorFromString("endLoadingUpdates"))
-        controller = nil
-        lastTrackKey = nil
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        process?.terminate()
+        process = nil
+        outputPipe = nil
+        onUpdateHandler = nil
+        latest = nil
+        lastEmitted = nil
+        lastEmittedKey = nil
+        lastEmittedNil = false
     }
 
-    //    private func poll(onUpdate: @escaping (PlaybackSnapshot?) -> Void) {
-    //        guard let info = currentInfo() else {
-    //            lastTrackKey = nil
-    //            onUpdate(nil)
-    //            return
-    //        }
-    //        onUpdate(makeSnapshot(from: info))
-    //    }
+    // 启动 perl + adapter stream
 
-    private func poll(onUpdate: @escaping (PlaybackSnapshot?) -> Void) {
-        let bLoaded = Self.mediaRemoteLoaded
-        let bDest = NSClassFromString("MRDestination") != nil
-        let bConfig =
-            NSClassFromString("MRNowPlayingControllerConfiguration") != nil
-        let bCtrl = NSClassFromString("MRNowPlayingController") != nil
-        let bResponse = controller?.value(forKey: "response") != nil
-        print(
-            "加载成功=\(bLoaded) 目标函数链接成功=\(bDest) 配置函数链接成功=\(bConfig) 控制器链接成功=\(bCtrl) 控制器=\(controller != nil) 响应=\(bResponse) 当前播放：",
-            currentInfo() ?? [:]
-        )
-
-        guard let info = currentInfo() else {
-            lastTrackKey = nil
-            onUpdate(nil)
-            return
-        }
-        onUpdate(makeSnapshot(from: info))
-    }
-
-    // 通过 OC runtime 读取 MRNowPlayingController
-
-    private func currentInfo() -> [String: Any]? {
-        guard Self.mediaRemoteLoaded else { return nil }
-        ensureController()
-        guard let response = controller?.value(forKey: "response") as? NSObject
-        else { return nil }
-        return Self.makeInfo(from: response)
-    }
-
-    private func ensureController() {
-        guard controller == nil else { return }
+    private func launch() {
+        guard shouldRun else { return }
 
         guard
-            let dest = Self.callClassMethod(
-                "MRDestination",
-                "userSelectedDestination"
-            ) as? NSObject,
-            let configClass = NSClassFromString(
-                "MRNowPlayingControllerConfiguration"
+            let script = Bundle.module.url(
+                forResource: "mediaremote-adapter",
+                withExtension: "pl"
             ),
-            let allocatedConfig = Self.allocate(configClass),
-            let config =
-                allocatedConfig
-                .perform(
-                    NSSelectorFromString("initWithDestination:"),
-                    with: dest
-                )?
-                .takeUnretainedValue() as? NSObject
-        else { return }
-
-        config.setValue(false, forKey: "singleShot")
-        config.setValue(true, forKey: "requestPlaybackState")
-        config.setValue(true, forKey: "requestPlaybackQueue")
-
-        guard let controllerClass = NSClassFromString("MRNowPlayingController"),
-            let rawController = Self.allocate(controllerClass),
-            let newController =
-                rawController
-                .perform(
-                    NSSelectorFromString("initWithConfiguration:"),
-                    with: config
-                )?
-                .takeUnretainedValue() as? NSObject
-        else { return }
-
-        _ = newController.perform(NSSelectorFromString("beginLoadingUpdates"))
-        controller = newController
-    }
-
-    //    private func ensureController() {
-    //        guard controller == nil else { return }
-    //
-    //        guard
-    //            let dest = Self.callClassMethod(
-    //                "MRDestination",
-    //                "userSelectedDestination"
-    //            )
-    //        else {
-    //            print("空1")
-    //            return
-    //        }
-    //        print("1是", dest)
-    //
-    //        guard
-    //            let configClass = NSClassFromString(
-    //                "MRNowPlayingControllerConfiguration"
-    //            )
-    //        else {
-    //            print("空2")
-    //            return
-    //        }
-    //        guard let allocatedConfig = Self.allocate(configClass) else {
-    //            print("空3")
-    //            return
-    //        }
-    //        print("2|3是", allocatedConfig)
-    //
-    //        guard
-    //            let config =
-    //                allocatedConfig
-    //                .perform(
-    //                    NSSelectorFromString("initWithDestination:"),
-    //                    with: dest
-    //                )?
-    //                .takeUnretainedValue() as? NSObject
-    //        else {
-    //            print("空4")
-    //            return
-    //        }
-    //        print("4是", config)
-    //
-    //        config.setValue(false, forKey: "singleShot")
-    //        config.setValue(true, forKey: "requestPlaybackState")
-    //        config.setValue(true, forKey: "requestPlaybackQueue")
-    //
-    //        guard let controllerClass = NSClassFromString("MRNowPlayingController")
-    //        else {
-    //            print("空5")
-    //            return
-    //        }
-    //        guard let rawController = Self.allocate(controllerClass) else {
-    //            print("空6")
-    //            return
-    //        }
-    //        print("5|6是", rawController)
-    //
-    //        guard
-    //            let newController =
-    //                rawController
-    //                .perform(
-    //                    NSSelectorFromString("initWithConfiguration:"),
-    //                    with: config
-    //                )?
-    //                .takeUnretainedValue() as? NSObject
-    //        else {
-    //            print("空7")
-    //            return
-    //        }
-    //        print("7是", newController)
-    //
-    //        _ = newController.perform(NSSelectorFromString("beginLoadingUpdates"))
-    //        controller = newController
-    //    }
-
-    // 调用 OC 类方法（Swift 的 AnyClass 没有 perform）
-    private static func callClassMethod(
-        _ className: String,
-        _ selectorName: String
-    ) -> AnyObject? {
-        guard let cls = NSClassFromString(className) else { return nil }
-        let sel = NSSelectorFromString(selectorName)
-        guard let method = class_getClassMethod(cls, sel) else { return nil }
-
-        typealias Fn = @convention(c) (AnyClass, Selector) -> Unmanaged<
-            AnyObject
-        >?
-        let fn = unsafeBitCast(method_getImplementation(method), to: Fn.self)
-        return fn(cls, sel)?.takeUnretainedValue()
-    }
-
-    // alloc 返回 +1 对象，所以用 takeRetainedValue
-    private static func allocate(_ cls: AnyClass) -> NSObject? {
-        let sel = NSSelectorFromString("alloc")
-        guard let method = class_getClassMethod(cls, sel) else { return nil }
-
-        typealias Fn = @convention(c) (AnyClass, Selector) -> Unmanaged<
-            AnyObject
-        >?
-        return unsafeBitCast(method_getImplementation(method), to: Fn.self)(
-            cls,
-            sel
-        )?
-        .takeRetainedValue() as? NSObject
-    }
-
-    private static func makeInfo(from response: NSObject) -> [String: Any]? {
-        var info: [String: Any] = [:]
-
-        if let state = response.value(forKey: "playbackState") as? NSNumber {
-            info["bridgePlaybackState"] = state
-        }
-        if let rate = response.value(forKey: "playbackRate") as? NSNumber {
-            info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] = rate
-        }
-
-        guard let queue = response.value(forKey: "playbackQueue") as? NSObject,
-            let items = queue.value(forKey: "contentItems") as? [NSObject],
-            !items.isEmpty
+            let framework = Bundle.module.url(
+                forResource: "MediaRemoteAdapter",
+                withExtension: "framework"
+            )
         else {
-            return info.isEmpty ? nil : info
+            print("[Adapter] 资源未找到")
+            return
         }
 
-        let location =
-            (queue.value(forKey: "location") as? NSNumber)?.intValue ?? 0
-        let item = items.indices.contains(location) ? items[location] : items[0]
-
-        guard let meta = item.value(forKey: "metadata") as? NSObject else {
-            return info.isEmpty ? nil : info
-        }
-
-        let pairs = [
-            ("title", "kMRMediaRemoteNowPlayingInfoTitle"),
-            ("trackArtistName", "kMRMediaRemoteNowPlayingInfoArtist"),
-            ("albumName", "kMRMediaRemoteNowPlayingInfoAlbum"),
-            ("duration", "kMRMediaRemoteNowPlayingInfoDuration"),
-            ("elapsedTime", "kMRMediaRemoteNowPlayingInfoElapsedTime"),
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        process.arguments = [
+            script.path,
+            framework.path,
+            "stream",
+            "--micros",
+            "--no-diff",
+            "--no-artwork",
         ]
-        for (metaKey, infoKey) in pairs {
-            if let value = meta.value(forKey: metaKey) {
-                info[infoKey] = value
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        pipe.fileHandleForReading.readabilityHandler = {
+            [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            DispatchQueue.main.async {
+                self?.consume(data)
             }
         }
 
-        if let extra = meta.value(forKey: "nowPlayingInfo") as? [String: Any] {
-            for (key, value) in extra where info[key] == nil {
-                info[key] = value
+        process.terminationHandler = {
+            [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, self.shouldRun else { return }
+                self.process = nil
+                self.outputPipe = nil
+                self.latest = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.launch()
+                }
             }
         }
-        return info.isEmpty ? nil : info
+
+        do {
+            try process.run()
+            self.process = process
+            self.outputPipe = pipe
+        } catch {
+            print("[Adapter] perl 启动失败", error)
+        }
     }
 
-    // 转成 PlaybackSnapshot
+    // 解析 stream 输出
 
-    private func makeSnapshot(from info: [String: Any]) -> PlaybackSnapshot? {
-        if let state = info["bridgePlaybackState"] as? NSNumber,
-            state.intValue == 3
-        {
-            return nil  // stopped
+    private func consume(_ data: Data) {
+        buffer.append(data)
+
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let lineData = Data(buffer[..<newline])
+            buffer.removeSubrange(buffer.startIndex...newline)
+
+            guard !lineData.isEmpty,
+                let object = try? JSONSerialization.jsonObject(with: lineData)
+                    as? [String: Any],
+                let payload = object["payload"] as? [String: Any]
+            else { continue }
+
+            apply(payload: payload)
+        }
+    }
+
+    private func apply(payload: [String: Any]) {
+        // payload 为空字典 表示 当前没有播放器在报告歌曲
+        guard let title = payload["title"] as? String,
+            !title.isEmpty,
+            let artist = payload["artist"] as? String,
+            !artist.isEmpty
+        else {
+            latest = nil
+            return
         }
 
-        guard let title = info["kMRMediaRemoteNowPlayingInfoTitle"] as? String,
-            !title.isEmpty,
-            let artist = info["kMRMediaRemoteNowPlayingInfoArtist"] as? String,
-            !artist.isEmpty
-        else { return nil }
+        let album = payload["album"] as? String ?? ""
+        let duration = Self.seconds(payload["durationMicros"])
+        let elapsed = Self.seconds(payload["elapsedTimeMicros"])
+        let timestamp = Self.seconds(payload["timestampEpochMicros"])
 
-        let album = info["kMRMediaRemoteNowPlayingInfoAlbum"] as? String ?? ""
-        let duration =
-            (info["kMRMediaRemoteNowPlayingInfoDuration"] as? NSNumber)?
-            .doubleValue ?? 0
-        let elapsed =
-            (info["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? NSNumber)?
-            .doubleValue ?? 0
-        let rate =
-            (info["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?
-            .doubleValue ?? 0
-        let state = (info["bridgePlaybackState"] as? NSNumber)?.intValue
+        let playing = payload["playing"] as? Bool ?? false
+        let rawRate = (payload["playbackRate"] as? NSNumber)?.doubleValue ?? 1
+        let rate = playing ? (rawRate > 0 ? rawRate : 1) : 0
 
-        // elapsedTime 只在事件时刷新，这里按速率插值，歌词才跟得上
         let key = "\(title)\u{1}\(artist)\u{1}\(album)\u{1}\(Int(duration))"
         let now = Date()
-        if key != lastTrackKey {
-            lastTrackKey = key
-            lastElapsed = elapsed
-            lastSampleDate = now
-        } else if abs(elapsed - lastElapsed) > 0.05 {
-            lastElapsed = elapsed
-            lastSampleDate = now
-        }
 
-        var position =
-            lastElapsed + now.timeIntervalSince(lastSampleDate) * max(rate, 0)
-        if duration > 0 { position = min(position, duration) }
-        position = max(position, 0)
+        let justResumed = (latest?.isPlaying == false) && playing
 
-        return PlaybackSnapshot(
+        latest = TrackState(
+            key: key,
             title: title,
             artist: artist,
             album: album,
             duration: duration,
-            position: position,
-            isPlaying: state.map { $0 == 1 } ?? (rate > 0)
+            elapsed: elapsed,
+            timestamp: timestamp,
+            rate: rate,
+            isPlaying: playing,
+            anchorNow: justResumed,
+            receivedAt: now
         )
     }
+
+    private func emitSnapshot() {
+        guard let state = latest else {
+            if !lastEmittedNil {
+                lastEmittedNil = true
+                lastEmitted = nil
+                lastEmittedKey = nil
+                onUpdateHandler?(nil)
+            }
+            return
+        }
+        lastEmittedNil = false
+
+        let now = Date().timeIntervalSince1970
+
+        let reference: TimeInterval
+        if state.anchorNow {
+            // 恢复播放：以“现在”为锚点，elapsed 取暂停时的位置，不能把暂停的时间也算进播放进度
+            reference = now
+        } else if state.timestamp > 0 {
+            // 正常播放/首次启动：用数据本身的记录时刻外推
+            reference = state.timestamp
+        } else {
+            reference = state.receivedAt.timeIntervalSince1970
+        }
+
+        var position =
+            state.elapsed + max(0, now - reference) * max(state.rate, 0)
+        if state.duration > 0 { position = min(position, state.duration) }
+        position = max(position, 0)
+
+        let snapshot = PlaybackSnapshot(
+            title: state.title,
+            artist: state.artist,
+            album: state.album,
+            duration: state.duration,
+            position: position,
+            isPlaying: state.isPlaying
+        )
+
+        // 同一首歌、同一播放状态、进度几乎没变化，不回调
+        if state.key == lastEmittedKey,
+            let last = lastEmitted,
+            last.title == snapshot.title,
+            last.artist == snapshot.artist,
+            last.album == snapshot.album,
+            last.duration == snapshot.duration,
+            last.isPlaying == snapshot.isPlaying,
+            abs(last.position - snapshot.position) < 0.05
+        {
+            return
+        }
+
+        lastEmittedKey = state.key
+        lastEmitted = snapshot
+        onUpdateHandler?(snapshot)
+    }
+
+    private static func seconds(_ value: Any?) -> TimeInterval {
+        guard let n = value as? NSNumber else { return 0 }
+        return n.doubleValue / 1_000_000
+    }
+
+    private static func number(_ value: Any?) -> Double {
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return Double(i) }
+        return 0
+    }
+
 }

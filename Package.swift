@@ -7,7 +7,11 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "歌词精灵",
-            path: "Sources/MacSpotifyLyrics"
+            path: "Sources/MacSpotifyLyrics",
+            resources: [
+                .copy("Resources/mediaremote-adapter.pl"),
+                .copy("Resources/MediaRemoteAdapter.framework")
+            ]
         )
     ]
 )

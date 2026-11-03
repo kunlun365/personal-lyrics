@@ -67,7 +67,7 @@ final class TouchBarLyricsController: NSObject, NSTouchBarDelegate {
         wideMarquee.text = Self.placeholderText
 
         let item = NSCustomTouchBarItem(identifier: Self.trayItemIdentifier)
-        item.view = trayMarquee // must be set before addSystemTrayItem:
+        item.view = trayMarquee  // must be set before addSystemTrayItem:
         item.customizationLabel = "Now Playing Lyrics"
         trayItem = item
 
@@ -99,7 +99,9 @@ final class TouchBarLyricsController: NSObject, NSTouchBarDelegate {
             .store(in: &cancellables)
 
         Publishers.CombineLatest(appState.$lyricsResult, appState.$currentLineIndex)
-            .sink { [weak self] _, _ in self?.refreshText() }
+            .sink { [weak self] result, index in
+                self?.refreshText(result, index)
+            }
             .store(in: &cancellables)
 
         // ControlStrip/TouchBarServer are restarted across sleep on some machines, silently
@@ -128,7 +130,7 @@ final class TouchBarLyricsController: NSObject, NSTouchBarDelegate {
             NSLog("[TouchBar] Control Strip API unavailable on this macOS; lyrics item skipped.")
             return
         }
-        refreshText(force: true)
+        refreshText(appState.lyricsResult, appState.currentLineIndex, force: true)
         guard TouchBarPrivateAPI.addSystemTrayItem(trayItem) else { return }
         TouchBarPrivateAPI.setControlStripPresence(true, for: Self.trayItemIdentifier)
         isInstalled = true
@@ -148,11 +150,13 @@ final class TouchBarLyricsController: NSObject, NSTouchBarDelegate {
         guard !isWideBarPresented, TouchBarPrivateAPI.isSystemModalAvailable else { return }
         TouchBarPrivateAPI.setSystemModalShowsCloseBox(false)
         // placement 0 keeps the Control Strip beside the presented bar.
-        guard TouchBarPrivateAPI.presentSystemModalBar(
-            wideBar,
-            placement: 0,
-            anchoredTo: Self.trayItemIdentifier
-        ) else { return }
+        guard
+            TouchBarPrivateAPI.presentSystemModalBar(
+                wideBar,
+                placement: 0,
+                anchoredTo: Self.trayItemIdentifier
+            )
+        else { return }
         isWideBarPresented = true
     }
 
@@ -177,18 +181,25 @@ final class TouchBarLyricsController: NSObject, NSTouchBarDelegate {
 
     // MARK: - Text
 
-    private var currentLyricText: String {
-        guard case .synced(let lines) = appState.lyricsResult else { return Self.placeholderText }
-        let index = appState.currentLineIndex ?? 0
-        guard lines.indices.contains(index) else { return Self.placeholderText }
-        let text = lines[index].text.trimmingCharacters(in: .whitespaces)
-        return text.isEmpty ? Self.placeholderText : text
+    private func lyricText(_ result: LyricsResult, _ index: Int?) -> String {
+        switch result {
+        case .synced(let lines):
+            let i = index ?? 0
+            guard lines.indices.contains(i) else { return Self.placeholderText }
+            let text = lines[i].text.trimmingCharacters(in: .whitespaces)
+            return text.isEmpty ? Self.placeholderText : text
+        case .plain(let text):
+            let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? Self.placeholderText : text
+        case .none:
+            return Self.placeholderText
+        }
     }
 
     /// Deduped here as well as in the view: the playback poller fires several times a second with
     /// the same line, and restarting the scroll animation that often makes it unreadable.
-    private func refreshText(force: Bool = false) {
-        let text = currentLyricText
+    private func refreshText(_ result: LyricsResult, _ index: Int?, force: Bool = false) {
+        let text = lyricText(result, index)
         guard force || text != lastText else { return }
         lastText = text
         trayMarquee.text = text

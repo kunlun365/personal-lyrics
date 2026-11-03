@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var floatingPanel: FloatingPanel?
     private var settingsWindowController: SettingsWindowController?
     private var touchBarController: TouchBarLyricsController?
-    private let poller = SpotifyPoller()
+    private let poller = MediaRemoteAdapterPoller()
     private var lyricsSourceChain: LyricsSourceChain
     private let lyricsCache = LyricsCache()
     private let syncEngine = LyricsSyncEngine()
@@ -77,7 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleSnapshot(_ snapshot: PlaybackSnapshot?) {
-        appState.currentSnapshot = snapshot
+        if shouldPublishSnapshot(snapshot) {
+            appState.currentSnapshot = snapshot
+        }
 
         guard let snapshot else {
             // 切歌瞬间 Spotify 会短暂返回空状态，立即清空歌词，但延迟 1s 再提示“未检测到歌曲真在播放”，避免切歌间隙提示闪烁
@@ -91,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.lastResolvedTrackKey = nil
                 self.lyricsFetchTask?.cancel()
                 self.appState.lyricsResult = .plain(
-                    "未检测到歌曲正在播放\n\n请运行Spotify并播放一首歌。"
+                    "未检测到歌曲正在播放\n\n请播放一首歌。"
                 )
                 self.appState.currentLineIndex = nil
             }
@@ -120,11 +122,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if case .synced(let lines) = appState.lyricsResult {
-            appState.currentLineIndex = syncEngine.currentLineIndex(
-                for: snapshot.position,
-                in: lines
-            )
+            let newIndex = syncEngine.currentLineIndex(for: snapshot.position, in: lines)
+            if appState.currentLineIndex != newIndex {
+                appState.currentLineIndex = newIndex
+            }
         }
+    }
+    
+    private func shouldPublishSnapshot(_ new: PlaybackSnapshot?) -> Bool {
+        guard let old = appState.currentSnapshot else { return new != nil }
+        guard let new else { return true }
+        return old.title != new.title
+            || old.artist != new.artist
+            || old.album != new.album
+            || old.duration != new.duration
+            || old.isPlaying != new.isPlaying
     }
 
     private func resolveLyrics(
